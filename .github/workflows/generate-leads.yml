@@ -1,19 +1,13 @@
 name: Generate Bali construction leads
 
 on:
-  push:
-    branches:
-      - claude/bali-villa-leads-google-maps-jtg9x2
-    paths:
-      - ".github/workflows/generate-leads.yml"
-      - "lead-generation/run-request.txt"
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub environment that holds the GOOGLE_MAP_API secret
+        description: GitHub environment that holds the GOOGLE_MAP_API secret (blank = auto-detect)
         type: string
-        required: true
-        default: Google Maps API
+        required: false
+        default: ""
       target:
         description: Number of unique leads to collect
         type: string
@@ -27,9 +21,43 @@ permissions:
   contents: write
 
 jobs:
-  generate:
+  discover:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'Google Maps API' }}
+    outputs:
+      env_name: ${{ steps.pick.outputs.env_name }}
+      all_envs: ${{ steps.pick.outputs.all_envs }}
+    steps:
+      - name: Pick the environment holding the secret
+        id: pick
+        env:
+          GH_INPUT_ENV: ${{ inputs.environment }}
+        run: |
+          if [ -n "$GH_INPUT_ENV" ]; then
+            echo "Using environment from input: $GH_INPUT_ENV"
+            echo "env_name=$GH_INPUT_ENV" >> "$GITHUB_OUTPUT"
+            echo "all_envs=(input override)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/environments" > envs.json
+          echo "Environments found:"
+          jq -r '.environments[] | "\(.name)  (created \(.created_at))"' envs.json
+          # Oldest environment = the one the user created (a newer empty
+          # 'Google Maps API' env was auto-created by an earlier run).
+          NAME=$(jq -r '.environments | sort_by(.created_at) | .[0].name // empty' envs.json)
+          if [ -z "$NAME" ]; then
+            echo "::error::No environments exist on this repository."
+            exit 1
+          fi
+          echo "Picked: $NAME"
+          echo "env_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "all_envs=$(jq -rc '[.environments[].name]' envs.json)" >> "$GITHUB_OUTPUT"
+
+  generate:
+    needs: discover
+    runs-on: ubuntu-latest
+    environment: ${{ needs.discover.outputs.env_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +66,7 @@ jobs:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAP_API }}
         run: |
           if [ -z "$GOOGLE_MAPS_API_KEY" ]; then
-            echo "::error::Secret GOOGLE_MAP_API is empty in environment '${{ inputs.environment || 'Google Maps API' }}'. Pass the correct environment name as the workflow input."
+            echo "::error::Secret GOOGLE_MAP_API is empty in environment '${{ needs.discover.outputs.env_name }}'. Environments on this repo: ${{ needs.discover.outputs.all_envs }}. Re-run via workflow_dispatch passing the right environment name, or move the secret to Repository secrets."
             exit 1
           fi
 

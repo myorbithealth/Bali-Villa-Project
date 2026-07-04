@@ -252,6 +252,8 @@ def main():
     parser.add_argument("--target", type=int, default=1000, help="unique leads to collect")
     parser.add_argument("--max-calls", type=int, default=1000, help="hard API call budget")
     parser.add_argument("--max-pages", type=int, default=3, help="pages per query (20 results each)")
+    parser.add_argument("--category-cap", type=int, default=0,
+                        help="max leads per category (0 = unlimited); keeps the mix diverse")
     parser.add_argument("--out", default="leads_bali_construction.csv", help="output CSV path")
     parser.add_argument("--dry-run", action="store_true", help="print the query plan and exit")
     args = parser.parse_args()
@@ -279,9 +281,12 @@ def main():
     aborted = None
 
     try:
+        category_counts = {}
         for index, (category, why, query) in enumerate(plan, 1):
             if len(leads) >= args.target:
                 break
+            if args.category_cap and category_counts.get(category, 0) >= args.category_cap:
+                continue
             page_token = None
             new_here = 0
             for _page in range(args.max_pages):
@@ -290,9 +295,14 @@ def main():
                     pid = place.get("id")
                     if pid and pid not in leads:
                         leads[pid] = place_to_lead(place, category, why, query)
+                        category_counts[category] = category_counts.get(category, 0) + 1
                         new_here += 1
+                        if args.category_cap and category_counts[category] >= args.category_cap:
+                            break
                 page_token = data.get("nextPageToken")
                 if not page_token or len(leads) >= args.target:
+                    break
+                if args.category_cap and category_counts.get(category, 0) >= args.category_cap:
                     break
                 time.sleep(0.2)
             print(f"[{index}/{len(plan)}] {query!r}: +{new_here} new "
