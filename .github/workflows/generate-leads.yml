@@ -1,0 +1,65 @@
+name: Generate Bali construction leads
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment that holds the GOOGLE_MAP_API secret
+        type: string
+        required: true
+        default: Google Maps API
+      target:
+        description: Number of unique leads to collect
+        type: string
+        default: "1000"
+      max_calls:
+        description: Hard budget of Google API calls (aborts beyond this)
+        type: string
+        default: "1000"
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret is present
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAP_API }}
+        run: |
+          if [ -z "$GOOGLE_MAPS_API_KEY" ]; then
+            echo "::error::Secret GOOGLE_MAP_API is empty in environment '${{ inputs.environment }}'. Pass the correct environment name as the workflow input."
+            exit 1
+          fi
+
+      - name: Generate leads
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAP_API }}
+        run: |
+          python3 lead-generation/generate_leads.py \
+            --target "${{ inputs.target }}" \
+            --max-calls "${{ inputs.max_calls }}" \
+            --out lead-generation/leads_bali_construction.csv \
+            | tee lead-generation/last_run_summary.txt
+
+      - name: Upload CSV as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bali-construction-leads
+          path: lead-generation/leads_bali_construction.csv
+          if-no-files-found: ignore
+
+      - name: Commit results to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lead-generation/leads_bali_construction.csv lead-generation/last_run_summary.txt
+          git diff --cached --quiet && { echo "No changes to commit"; exit 0; }
+          git commit -m "Add generated Bali construction leads CSV"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
